@@ -1,0 +1,68 @@
+name: Restore verified Easy Green source
+
+on:
+  push:
+    branches:
+      - 'test/easy-green-0.1.39'
+    paths:
+      - '.bootstrap/easy-green-repo-0.1.39.zip'
+      - '.github/workflows/restore-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out bootstrap commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Replace repository with verified source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE='.bootstrap/easy-green-repo-0.1.39.zip'
+          test -f "$BUNDLE"
+          TMP="$(mktemp -d)"
+          unzip -q "$BUNDLE" -d "$TMP"
+          test -f "$TMP/style.css"
+          test -f "$TMP/functions.php"
+          test -f "$TMP/scripts/verify-release.sh"
+          test "$(sed -n 's/^Version:[[:space:]]*//p' "$TMP/style.css" | head -n1 | tr -d '\r')" = '0.1.39'
+          rsync -a --delete \
+            --exclude '.git/' \
+            --exclude '.bootstrap/' \
+            --exclude '.github/workflows/restore-source.yml' \
+            "$TMP/" ./
+          rm -rf .bootstrap
+          rm -f .github/workflows/restore-source.yml
+
+      - name: Verify complete restored source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/verify-release.sh
+          EASY_GREEN_CI_BUILD=1 ./scripts/build-zip.sh
+          ZIP='dist/easy-green-0.1.39.zip'
+          test -f "$ZIP"
+          unzip -t "$ZIP"
+          ROOTS="$(unzip -Z1 "$ZIP" | awk -F/ 'NF{print $1}' | sort -u)"
+          test "$ROOTS" = 'easy-green'
+          test -f _ai/PACKAGE-FILES.json
+
+      - name: Commit complete source atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          git config user.name 'Donat Release Bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet && { echo 'Nothing to commit.'; exit 0; }
+          git commit -m 'Restore complete Easy Green 0.1.39 source'
+          git push origin HEAD:${GITHUB_REF_NAME}
